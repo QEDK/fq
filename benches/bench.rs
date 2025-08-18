@@ -144,7 +144,7 @@ fn bench_concurrent_spsc_large_messages(c: &mut Criterion) {
                             while producer
                                 .push(black_box(LargeMessage {
                                     val1: i as u128,
-                                    val2: format!("Message {}", i),
+                                    val2: format!("Message {i}"),
                                 }))
                                 .is_err()
                             {
