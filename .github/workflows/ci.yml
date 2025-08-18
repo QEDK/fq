@@ -45,4 +45,21 @@ jobs:
       - name: Security audit
         uses: actions-rs/audit-check@v1
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+         token: ${{ secrets.GITHUB_TOKEN }}
+
+  bench:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          components: rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: bench
+        run: cargo bench --all-features -v
