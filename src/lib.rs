@@ -1,10 +1,10 @@
+use std::alloc::{Layout, alloc, dealloc};
+use std::cell::UnsafeCell;
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
-use std::cell::UnsafeCell;
-use std::alloc::{alloc, dealloc, Layout};
 use std::ptr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Padding to prevent false sharing
 #[repr(C, align(64))]
@@ -23,19 +23,19 @@ impl<T> CachePadded<T> {
 pub struct FastQueue<T> {
     /// Capacity mask (capacity - 1) for fast modulo
     mask: usize,
-    
+
     /// The actual capacity
     capacity: usize,
-    
+
     /// Buffer storing elements directly
     buffer: *mut MaybeUninit<T>,
-    
+
     /// Producer cache line - head and cached tail together
     producer: CachePadded<ProducerCache>,
-    
+
     /// Consumer cache line - tail and cached head together  
     consumer: CachePadded<ConsumerCache>,
-    
+
     _phantom: PhantomData<T>,
 }
 
@@ -60,18 +60,17 @@ impl<T> FastQueue<T> {
     /// Capacity will be rounded up to the next power of two
     pub fn new(capacity: usize) -> (Producer<T>, Consumer<T>) {
         assert!(capacity > 0, "Capacity must be greater than 0");
-        
+
         let capacity = capacity.next_power_of_two();
         let mask = capacity - 1;
-        
-        let layout = Layout::array::<MaybeUninit<T>>(capacity)
-            .expect("Layout calculation failed");
+
+        let layout = Layout::array::<MaybeUninit<T>>(capacity).expect("Layout calculation failed");
         let buffer = unsafe { alloc(layout) as *mut MaybeUninit<T> };
-        
+
         if buffer.is_null() {
             panic!("Failed to allocate buffer");
         }
-        
+
         let queue = Arc::new(FastQueue {
             mask,
             capacity,
@@ -86,15 +85,13 @@ impl<T> FastQueue<T> {
             }),
             _phantom: PhantomData,
         });
-        
+
         let producer = Producer {
             queue: Arc::clone(&queue),
         };
-        
-        let consumer = Consumer {
-            queue,
-        };
-        
+
+        let consumer = Consumer { queue };
+
         (producer, consumer)
     }
 }
@@ -103,19 +100,19 @@ impl<T> Drop for FastQueue<T> {
     fn drop(&mut self) {
         let head = self.producer.value.head.load(Ordering::Relaxed);
         let mut tail = self.consumer.value.tail.load(Ordering::Relaxed);
-        
+
         while tail != head {
             unsafe {
                 let index = tail & self.mask;
                 let slot = self.buffer.add(index);
                 ptr::drop_in_place((*slot).as_mut_ptr());
             }
-            tail = tail.wrapping_add(1); 
+            tail = tail.wrapping_add(1);
         }
-        
+
         unsafe {
-            let layout = Layout::array::<MaybeUninit<T>>(self.capacity)
-                .expect("Layout calculation failed");
+            let layout =
+                Layout::array::<MaybeUninit<T>>(self.capacity).expect("Layout calculation failed");
             dealloc(self.buffer as *mut u8, layout);
         }
     }
@@ -133,43 +130,49 @@ impl<T> Producer<T> {
     pub fn push(&mut self, value: T) -> Result<(), T> {
         let head = self.queue.producer.value.head.load(Ordering::Relaxed);
         let next_head = head.wrapping_add(1);
-        
+
         let cached_tail = unsafe { *self.queue.producer.value.cached_tail.get() };
-        
+
         if next_head.wrapping_sub(cached_tail) > self.queue.capacity {
             // Reload actual tail (slow path)
             let tail = self.queue.consumer.value.tail.load(Ordering::Acquire);
-            unsafe { *self.queue.producer.value.cached_tail.get() = tail; }
-            
+            unsafe {
+                *self.queue.producer.value.cached_tail.get() = tail;
+            }
+
             // Check again with fresh tail
             if next_head.wrapping_sub(tail) > self.queue.capacity {
                 return Err(value);
             }
         }
-        
+
         unsafe {
             let index = head & self.queue.mask;
             let slot = self.queue.buffer.add(index);
             (*slot).as_mut_ptr().write(value);
         }
-        
-        self.queue.producer.value.head.store(next_head, Ordering::Release);
-        
+
+        self.queue
+            .producer
+            .value
+            .head
+            .store(next_head, Ordering::Release);
+
         Ok(())
     }
-    
+
     #[inline(always)]
     pub fn len(&self) -> usize {
         let head = self.queue.producer.value.head.load(Ordering::Relaxed);
         let tail = self.queue.consumer.value.tail.load(Ordering::Relaxed);
         head.wrapping_sub(tail)
     }
-    
+
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
-    
+
     #[inline(always)]
     pub fn is_full(&self) -> bool {
         self.len() >= self.queue.capacity
@@ -187,50 +190,56 @@ impl<T> Consumer<T> {
     #[inline(always)]
     pub fn pop(&mut self) -> Option<T> {
         let tail = self.queue.consumer.value.tail.load(Ordering::Relaxed);
-        
+
         // Check cached head first (fast path)
         let cached_head = unsafe { *self.queue.consumer.value.cached_head.get() };
-        
+
         if tail == cached_head {
             // Reload actual head (slow path)
             let head = self.queue.producer.value.head.load(Ordering::Acquire);
-            unsafe { *self.queue.consumer.value.cached_head.get() = head; }
-            
+            unsafe {
+                *self.queue.consumer.value.cached_head.get() = head;
+            }
+
             // Check if still empty
             if tail == head {
                 return None;
             }
         }
-        
+
         let value = unsafe {
             let index = tail & self.queue.mask;
             let slot = self.queue.buffer.add(index);
             (*slot).as_ptr().read()
         };
-        
+
         let next_tail = tail.wrapping_add(1);
-        self.queue.consumer.value.tail.store(next_tail, Ordering::Release);
-        
+        self.queue
+            .consumer
+            .value
+            .tail
+            .store(next_tail, Ordering::Release);
+
         Some(value)
     }
-    
+
     /// Peek at the front element without removing it
     #[inline(always)]
     pub fn peek(&self) -> Option<&T> {
         let tail = self.queue.consumer.value.tail.load(Ordering::Relaxed);
         let head = self.queue.producer.value.head.load(Ordering::Acquire);
-        
+
         if tail == head {
             return None;
         }
-        
+
         unsafe {
             let index = tail & self.queue.mask;
             let slot = self.queue.buffer.add(index);
             Some(&*(*slot).as_ptr())
         }
     }
-    
+
     /// Get the current size of the queue (may be stale)
     #[inline(always)]
     pub fn len(&self) -> usize {
@@ -238,7 +247,7 @@ impl<T> Consumer<T> {
         let tail = self.queue.consumer.value.tail.load(Ordering::Relaxed);
         head.wrapping_sub(tail)
     }
-    
+
     /// Check if the queue is empty (may be stale)
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
@@ -248,7 +257,7 @@ impl<T> Consumer<T> {
 
 impl<T> Iterator for Consumer<T> {
     type Item = T;
-    
+
     #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
         self.pop()
@@ -258,28 +267,28 @@ impl<T> Iterator for Consumer<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::thread;
     use std::sync::atomic::{AtomicBool, Ordering};
-    
+    use std::thread;
+
     #[test]
     fn test_basic_push_pop() {
         let (mut producer, mut consumer) = FastQueue::<usize>::new(2);
-        
+
         assert!(producer.push(42).is_ok());
         assert_eq!(consumer.pop(), Some(42));
         assert_eq!(consumer.pop(), None);
     }
-    
+
     #[test]
     fn test_capacity() {
         let (mut producer, mut consumer) = FastQueue::<usize>::new(4);
-        
+
         assert!(producer.push(1).is_ok());
         assert!(producer.push(2).is_ok());
         assert!(producer.push(3).is_ok());
         assert!(producer.push(4).is_ok());
         assert!(producer.push(5).is_err()); // Full
-        
+
         assert_eq!(consumer.pop(), Some(1));
         assert!(producer.push(5).is_ok()); // Space available now
         assert_eq!(consumer.pop(), Some(2));
@@ -287,15 +296,15 @@ mod tests {
         assert_eq!(consumer.pop(), Some(4));
         assert_eq!(consumer.pop(), Some(5));
     }
-    
+
     #[test]
     fn test_concurrent() {
         const COUNT: usize = 1_000_000;
         let (mut producer, mut consumer) = FastQueue::<usize>::new(1024);
-        
+
         let done = Arc::new(AtomicBool::new(false));
         let done_clone = Arc::clone(&done);
-        
+
         // Producer thread
         let producer_thread = thread::spawn(move || {
             for i in 0..COUNT {
@@ -305,7 +314,7 @@ mod tests {
             }
             done_clone.store(true, Ordering::Release);
         });
-        
+
         // Consumer thread
         let consumer_thread = thread::spawn(move || {
             let mut count = 0;
@@ -321,35 +330,35 @@ mod tests {
             }
             assert_eq!(count, COUNT);
         });
-        
+
         producer_thread.join().unwrap();
         consumer_thread.join().unwrap();
     }
-    
+
     #[test]
     fn test_wraparound() {
         let (mut producer, mut consumer) = FastQueue::<usize>::new(4);
-        
+
         // Fill queue
         for i in 0..4 {
             assert!(producer.push(i).is_ok());
         }
-        
+
         // Consume half
         for i in 0..2 {
             assert_eq!(consumer.pop(), Some(i));
         }
-        
+
         // Fill again (wraps around)
         for i in 4..6 {
             assert!(producer.push(i).is_ok());
         }
-        
+
         // Consume all
         for i in 2..6 {
             assert_eq!(consumer.pop(), Some(i));
         }
-        
+
         assert!(consumer.pop().is_none());
     }
 }
