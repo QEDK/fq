@@ -1,0 +1,30 @@
+[package]
+name = "fq"
+version = "0.0.1"
+authors = ["QEDK <hi@qedk.xyz>"]
+edition = "2024"
+description = "A simple ring-buffer based single-producer, single-consumer queue with no dependencies. You can use this to write Rust programs with low-latency message passing."
+homepage = "https://github.com/QEDK/fq"
+repository = "https://github.com/QEDK/fq"
+documentation = "https://docs.rs/fq"
+readme = "README.md"
+license = "MIT OR LGPL-3.0-or-later"
+keywords = ["fq", "queue", "messaging", "spsc", "message-queue"]
+categories = ["asynchronous", "data-structures", "concurrency"]
+
+[profile.maxperf]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+
+[profile.bench]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "bench"
+harness = false
