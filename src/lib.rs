@@ -145,8 +145,7 @@ impl<T> Drop for FastQueue<T> {
         }
 
         unsafe {
-            let layout = Layout::array::<MaybeUninit<T>>(self.capacity.0)
-                .expect("layout");
+            let layout = Layout::array::<MaybeUninit<T>>(self.capacity.0).expect("layout");
             dealloc(self.buffer.0 as *mut u8, layout);
         }
     }
