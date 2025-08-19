@@ -53,27 +53,13 @@ pub struct FastQueue<T> {
     /// Buffer storing elements directly
     buffer: CachePadded<*mut MaybeUninit<T>>,
 
-    /// Producer cache line with head and cached tail together
-    producer: CachePadded<ProducerCache>,
+    /// Written by producer, read by consumer.
+    head: CachePadded<AtomicUsize>,
 
-    /// Consumer cache line with tail and cached head together  
-    consumer: CachePadded<ConsumerCache>,
+    /// Written by consumer, read by producer.
+    tail: CachePadded<AtomicUsize>,
 
-    _phantom: PhantomData<T>,
-}
-
-struct ProducerCache {
-    /// Write position
-    head: AtomicUsize,
-    /// Cached read position to avoid loading tail
-    cached_tail: UnsafeCell<usize>,
-}
-
-struct ConsumerCache {
-    /// Read position
-    tail: AtomicUsize,
-    /// Cached write position to avoid loading head
-    cached_head: UnsafeCell<usize>,
+    _pd: PhantomData<T>,
 }
 
 unsafe impl<T: Send> Send for FastQueue<T> {}
@@ -108,22 +94,24 @@ impl<T> FastQueue<T> {
             mask: CachePadded(mask),
             capacity: CachePadded(capacity),
             buffer: CachePadded(buffer),
-            producer: CachePadded(ProducerCache {
-                head: AtomicUsize::new(0),
-                cached_tail: UnsafeCell::new(0),
-            }),
-            consumer: CachePadded(ConsumerCache {
-                tail: AtomicUsize::new(0),
-                cached_head: UnsafeCell::new(0),
-            }),
-            _phantom: PhantomData,
+            head: CachePadded(AtomicUsize::new(0)),
+            tail: CachePadded(AtomicUsize::new(0)),
+            _pd: PhantomData,
         });
 
         let producer = Producer {
-            queue: Arc::clone(&queue),
+            queue: CachePadded(Arc::clone(&queue)),
+            head: CachePadded(UnsafeCell::new(0)),
+            cached_tail: CachePadded(UnsafeCell::new(0)),
+            _pd: PhantomData,
         };
 
-        let consumer = Consumer { queue };
+        let consumer = Consumer {
+            queue: CachePadded(queue),
+            tail: CachePadded(UnsafeCell::new(0)),
+            cached_head: CachePadded(UnsafeCell::new(0)),
+            _pd: PhantomData,
+        };
 
         (producer, consumer)
     }
@@ -132,8 +120,8 @@ impl<T> FastQueue<T> {
 impl<T> Drop for FastQueue<T> {
     /// Drops all elements in the queue. This will only drop the elements, not the queue itself.
     fn drop(&mut self) {
-        let head = self.producer.0.head.load(Ordering::Relaxed);
-        let mut tail = self.consumer.0.tail.load(Ordering::Relaxed);
+        let head = self.head.0.load(Ordering::Relaxed);
+        let mut tail = self.tail.0.load(Ordering::Relaxed);
 
         while tail != head {
             unsafe {
@@ -153,7 +141,10 @@ impl<T> Drop for FastQueue<T> {
 
 /// A producer for the `FastQueue`. This is used to push values into the queue.
 pub struct Producer<T> {
-    queue: Arc<FastQueue<T>>,
+    queue: CachePadded<Arc<FastQueue<T>>>,
+    head: CachePadded<UnsafeCell<usize>>,
+    cached_tail: CachePadded<UnsafeCell<usize>>,
+    _pd: PhantomData<T>,
 }
 
 unsafe impl<T: Send> Send for Producer<T> {}
@@ -170,7 +161,7 @@ impl<T> Producer<T> {
     /// ```
     #[inline(always)]
     pub fn push(&mut self, value: T) -> Result<(), T> {
-        let head = self.queue.producer.0.head.load(Ordering::Relaxed);
+        let head = unsafe { *self.head.0.get() };
         let next_head = head.wrapping_add(1);
 
         #[cfg(any(
@@ -183,39 +174,40 @@ impl<T> Producer<T> {
             prefetch_write(next_slot as *const u8);
         }
 
-        let cached_tail = unsafe { *self.queue.producer.0.cached_tail.get() };
+        let cached_tail = unsafe { *self.cached_tail.0.get() };
 
-        if next_head.wrapping_sub(cached_tail) > self.queue.capacity.0 {
+        if next_head.wrapping_sub(cached_tail) > self.queue.0.capacity.0 {
             // Reload actual tail (slow path)
-            let tail = self.queue.consumer.0.tail.load(Ordering::Acquire);
-            unsafe {
-                *self.queue.producer.0.cached_tail.get() = tail;
+            let tail = self.queue.0.tail.0.load(Ordering::Acquire);
+
+            if tail != cached_tail {
+                // Update cached tail
+                unsafe {
+                    *self.cached_tail.0.get() = tail;
+                }
             }
 
             // Check again with fresh tail
-            if next_head.wrapping_sub(tail) > self.queue.capacity.0 {
+            if next_head.wrapping_sub(tail) > self.queue.0.capacity.0 {
                 return Err(value);
             }
         }
 
         unsafe {
-            let index = head & self.queue.mask.0;
-            let slot = self.queue.buffer.0.add(index);
+            let index = head & self.queue.0.mask.0;
+            let slot = self.queue.0.buffer.0.add(index);
             (*slot).as_mut_ptr().write(value);
+            *self.head.0.get() = next_head;
         }
 
-        self.queue
-            .producer
-            .0
-            .head
-            .store(next_head, Ordering::Release);
+        self.queue.0.head.0.store(next_head, Ordering::Release);
 
         Ok(())
     }
 
     /// Returns the current number of elements in the queue (may be stale)
     ///
-    /// This function will return stale data when holding a lock on the queue.
+    /// This function may return stale data when holding a lock on the queue.
     /// # Example
     /// ```
     /// use fq::FastQueue;
@@ -225,8 +217,8 @@ impl<T> Producer<T> {
     /// ```
     #[inline(always)]
     pub fn len(&self) -> usize {
-        let head = self.queue.producer.0.head.load(Ordering::Relaxed);
-        let tail = self.queue.consumer.0.tail.load(Ordering::Relaxed);
+        let head = unsafe { *self.head.0.get() };
+        let tail = self.queue.0.tail.0.load(Ordering::Relaxed);
         head.wrapping_sub(tail)
     }
 
@@ -256,12 +248,15 @@ impl<T> Producer<T> {
     /// ```
     #[inline(always)]
     pub fn is_full(&self) -> bool {
-        self.len() >= self.queue.capacity.0
+        self.len() >= self.queue.0.capacity.0
     }
 }
 
 pub struct Consumer<T> {
-    queue: Arc<FastQueue<T>>,
+    queue: CachePadded<Arc<FastQueue<T>>>,
+    tail: CachePadded<UnsafeCell<usize>>,
+    cached_head: CachePadded<UnsafeCell<usize>>,
+    _pd: PhantomData<T>,
 }
 
 unsafe impl<T: Send> Send for Consumer<T> {}
@@ -279,26 +274,31 @@ impl<T> Consumer<T> {
     /// ```
     #[inline(always)]
     pub fn pop(&mut self) -> Option<T> {
-        let tail = self.queue.consumer.0.tail.load(Ordering::Relaxed);
+        let tail = unsafe { *self.tail.0.get() };
 
         #[cfg(any(
             target_arch = "x86",
             all(target_arch = "x86_64", target_feature = "sse")
         ))]
         unsafe {
-            let next_index = (tail + 1) & self.queue.mask.0;
+            let next_tail = tail.wrapping_add(1);
+            let next_index = next_tail & self.queue.mask.0;
             let next_slot = self.queue.buffer.0.add(next_index);
             prefetch_read(next_slot as *const u8);
         }
 
         // Check cached head first (fast path)
-        let cached_head = unsafe { *self.queue.consumer.0.cached_head.get() };
+        let cached_head = unsafe { *self.cached_head.0.get() };
 
         if tail == cached_head {
             // Reload actual head (slow path)
-            let head = self.queue.producer.0.head.load(Ordering::Acquire);
-            unsafe {
-                *self.queue.consumer.0.cached_head.get() = head;
+            let head = self.queue.0.head.0.load(Ordering::Acquire);
+
+            if head != cached_head {
+                // Update cached head
+                unsafe {
+                    *self.cached_head.0.get() = head;
+                }
             }
 
             // Check if still empty
@@ -308,17 +308,14 @@ impl<T> Consumer<T> {
         }
 
         let value = unsafe {
-            let index = tail & self.queue.mask.0;
-            let slot = self.queue.buffer.0.add(index);
+            let index = tail & self.queue.0.mask.0;
+            let slot = self.queue.0.buffer.0.add(index);
             (*slot).as_ptr().read()
         };
 
         let next_tail = tail.wrapping_add(1);
-        self.queue
-            .consumer
-            .0
-            .tail
-            .store(next_tail, Ordering::Release);
+        unsafe { *self.tail.0.get() = next_tail };
+        self.queue.0.tail.0.store(next_tail, Ordering::Release);
 
         Some(value)
     }
@@ -334,23 +331,16 @@ impl<T> Consumer<T> {
     /// ```
     #[inline(always)]
     pub fn peek(&self) -> Option<&T> {
-        let tail = self.queue.consumer.0.tail.load(Ordering::Relaxed);
-        let head = self.queue.producer.0.head.load(Ordering::Acquire);
+        let tail = unsafe { *self.tail.0.get() };
+        let head = self.queue.0.head.0.load(Ordering::Relaxed);
 
         if tail == head {
             return None;
         }
 
         unsafe {
-            let index = tail & self.queue.mask.0;
-            let slot = self.queue.buffer.0.add(index);
-            #[cfg(any(
-                target_arch = "x86",
-                all(target_arch = "x86_64", target_feature = "sse")
-            ))]
-            {
-                prefetch_read(slot as *const u8);
-            }
+            let index = tail & self.queue.0.mask.0;
+            let slot = self.queue.0.buffer.0.add(index);
             Some(&*(*slot).as_ptr())
         }
     }
@@ -367,8 +357,8 @@ impl<T> Consumer<T> {
     /// ```
     #[inline(always)]
     pub fn len(&self) -> usize {
-        let head = self.queue.producer.0.head.load(Ordering::Relaxed);
-        let tail = self.queue.consumer.0.tail.load(Ordering::Relaxed);
+        let head = self.queue.0.head.0.load(Ordering::Relaxed);
+        let tail = unsafe { *self.tail.0.get() };
         head.wrapping_sub(tail)
     }
 

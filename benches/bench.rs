@@ -91,11 +91,11 @@ fn bench_concurrent_spsc(c: &mut Criterion) {
             messages,
             |b, &messages| {
                 b.iter(|| {
-                    let (mut producer, mut consumer) = FastQueue::<u64>::new(1024);
+                    let (mut producer, mut consumer) = FastQueue::<usize>::new(1024);
 
                     let producer_handle = thread::spawn(move || {
                         for i in 0..messages {
-                            while black_box(producer.push(black_box(i as u64))).is_err() {
+                            while black_box(producer.push(black_box(i as usize))).is_err() {
                                 std::hint::spin_loop();
                             }
                         }
@@ -179,7 +179,7 @@ fn bench_burst_operations(c: &mut Criterion) {
 
     group.bench_function("burst_push_pop_16", |b| {
         b.iter(|| {
-            let (mut producer, mut consumer) = FastQueue::<u64>::new(32);
+            let (mut producer, mut consumer) = FastQueue::<usize>::new(32);
 
             // Burst push 16 items
             for i in 0..16 {
@@ -195,7 +195,7 @@ fn bench_burst_operations(c: &mut Criterion) {
 
     group.bench_function("alternating_push_pop", |b| {
         b.iter(|| {
-            let (mut producer, mut consumer) = FastQueue::<u64>::new(16);
+            let (mut producer, mut consumer) = FastQueue::<usize>::new(16);
 
             for i in 0..1000 {
                 black_box(producer.push(black_box(i))).unwrap();
@@ -213,7 +213,7 @@ fn bench_wraparound(c: &mut Criterion) {
     group.bench_function("wraparound_operations", |b| {
         b.iter_batched(
             || {
-                let (mut producer, mut consumer) = FastQueue::<u64>::new(64);
+                let (mut producer, mut consumer) = FastQueue::<usize>::new(64);
                 // Fill queue to near capacity
                 for i in 0..60 {
                     producer.push(i).unwrap();
@@ -254,7 +254,7 @@ fn bench_capacity_scaling(c: &mut Criterion) {
             |b, &capacity| {
                 b.iter(|| {
                     let (_producer, _consumer) =
-                        black_box(FastQueue::<u64>::new(black_box(capacity)));
+                        black_box(FastQueue::<usize>::new(black_box(capacity)));
                 });
             },
         );
@@ -269,7 +269,7 @@ fn bench_peek_operations(c: &mut Criterion) {
     group.bench_function("peek_vs_pop", |b| {
         b.iter_batched(
             || {
-                let (mut producer, consumer) = FastQueue::<u64>::new(1024);
+                let (mut producer, consumer) = FastQueue::<usize>::new(1024);
                 for i in 0..500 {
                     producer.push(i).unwrap();
                 }
@@ -296,7 +296,7 @@ fn bench_len_operations(c: &mut Criterion) {
     group.bench_function("len_check_overhead", |b| {
         b.iter_batched(
             || {
-                let (mut producer, consumer) = FastQueue::<u64>::new(1024);
+                let (mut producer, consumer) = FastQueue::<usize>::new(1024);
                 for i in 0..500 {
                     producer.push(i).unwrap();
                 }
