@@ -150,7 +150,7 @@ impl<T> Producer<T> {
             target_arch = "x86",
             all(target_arch = "x86_64", target_feature = "sse")
         ))]
-        {
+        unsafe {
             let next_index = next_head & self.queue.mask.0;
             let next_slot = self.queue.buffer.0.add(next_index);
             prefetch_write(next_slot as *const u8);
@@ -222,7 +222,7 @@ impl<T> Consumer<T> {
             target_arch = "x86",
             all(target_arch = "x86_64", target_feature = "sse")
         ))]
-        {
+        unsafe {
             let next_index = (tail + 1) & self.queue.mask.0;
             let next_slot = self.queue.buffer.0.add(next_index);
             prefetch_read(next_slot as *const u8);
