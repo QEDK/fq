@@ -99,8 +99,8 @@ impl<T> Drop for FastQueue<T> {
         }
 
         unsafe {
-            let layout =
-                Layout::array::<MaybeUninit<T>>(self.capacity.0).expect("Layout calculation failed");
+            let layout = Layout::array::<MaybeUninit<T>>(self.capacity.0)
+                .expect("Layout calculation failed");
             dealloc(self.buffer.0 as *mut u8, layout);
         }
     }
@@ -146,7 +146,10 @@ impl<T> Producer<T> {
             .head
             .store(next_head, Ordering::Release);
 
-        #[cfg(any(target_arch = "x86", all(target_arch = "x86_64", target_feature = "sse")))]
+        #[cfg(any(
+            target_arch = "x86",
+            all(target_arch = "x86_64", target_feature = "sse")
+        ))]
         {
             let next_index = next_head & self.queue.mask;
             let next_slot = self.queue.buffer.add(next_index);
@@ -215,7 +218,10 @@ impl<T> Consumer<T> {
             .tail
             .store(next_tail, Ordering::Release);
 
-        #[cfg(any(target_arch = "x86", all(target_arch = "x86_64", target_feature = "sse")))]
+        #[cfg(any(
+            target_arch = "x86",
+            all(target_arch = "x86_64", target_feature = "sse")
+        ))]
         {
             let next_index = (tail + 1) & self.queue.mask;
             let next_slot = self.queue.buffer.add(next_index);
@@ -238,7 +244,10 @@ impl<T> Consumer<T> {
         unsafe {
             let index = tail & self.queue.mask.0;
             let slot = self.queue.buffer.0.add(index);
-            #[cfg(any(target_arch = "x86", all(target_arch = "x86_64", target_feature = "sse")))]
+            #[cfg(any(
+                target_arch = "x86",
+                all(target_arch = "x86_64", target_feature = "sse")
+            ))]
             {
                 prefetch_read(slot as *const u8);
             }
@@ -261,7 +270,10 @@ impl<T> Consumer<T> {
     }
 }
 
-#[cfg(any(target_arch = "x86", all(target_arch = "x86_64", target_feature = "sse")))]
+#[cfg(any(
+    target_arch = "x86",
+    all(target_arch = "x86_64", target_feature = "sse")
+))]
 #[inline(always)]
 fn prefetch_read(p: *const u8) {
     unsafe {
@@ -275,7 +287,10 @@ fn prefetch_read(p: *const u8) {
     }
 }
 
-#[cfg(any(target_arch = "x86", all(target_arch = "x86_64", target_feature = "sse")))]
+#[cfg(any(
+    target_arch = "x86",
+    all(target_arch = "x86_64", target_feature = "sse")
+))]
 #[inline(always)]
 fn prefetch_write(p: *const u8) {
     unsafe {
