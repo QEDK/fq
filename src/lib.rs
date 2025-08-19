@@ -1,4 +1,36 @@
-use std::alloc::{Layout, alloc, dealloc};
+/*!
+A fast and simple ring-buffer-based single-producer, single-consumer queue with no dependencies. You can use this to write Rust programs with low-latency message passing.
+
+## Installation
+Add this to your `Cargo.toml`:
+```toml
+[dependencies]
+fq = "0.0.2"
+```
+
+## Quickstart
+```rust
+use fq::FastQueue;
+use std::thread;
+
+let (mut producer, mut consumer) = FastQueue::<String>::new(2);
+
+let sender = thread::spawn(move || {
+    producer.push("Hello, thread".to_owned())
+        .expect("Unable to send to queue");
+});
+
+let receiver = thread::spawn(move || {
+    while let Some(value) = consumer.next() {
+        assert_eq!(value, "Hello, thread");
+    }
+});
+
+sender.join().expect("The sender thread has panicked");
+receiver.join().expect("The receiver thread has panicked");
+```
+*/
+use std::alloc::{Layout, alloc, dealloc, handle_alloc_error};
 use std::cell::UnsafeCell;
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
@@ -10,6 +42,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[repr(C, align(64))]
 struct CachePadded<T>(T);
 
+/// A fast lock-free single-producer, single-consumer queue
 pub struct FastQueue<T> {
     /// Capacity mask (capacity - 1) for fast modulo
     mask: CachePadded<usize>,
@@ -20,10 +53,10 @@ pub struct FastQueue<T> {
     /// Buffer storing elements directly
     buffer: CachePadded<*mut MaybeUninit<T>>,
 
-    /// Producer cache line - head and cached tail together
+    /// Producer cache line with head and cached tail together
     producer: CachePadded<ProducerCache>,
 
-    /// Consumer cache line - tail and cached head together  
+    /// Consumer cache line with tail and cached head together  
     consumer: CachePadded<ConsumerCache>,
 
     _phantom: PhantomData<T>,
@@ -47,16 +80,28 @@ unsafe impl<T: Send> Send for FastQueue<T> {}
 unsafe impl<T: Send> Sync for FastQueue<T> {}
 
 impl<T> FastQueue<T> {
-    /// Capacity will be rounded up to the next power of two
+    /// Creates a SPSC queue with the given capacity. The allocated capacity may be higher.
+    ///
+    /// Capacity is rounded to the next power of two. The minimum allocated capacity is 2.
+    ///
+    /// # Example
+    /// ```
+    /// use fq::FastQueue;
+    /// struct Message {
+    ///     from: String,
+    ///     value: usize,
+    /// }
+    /// let (producer, consumer) = FastQueue::<Message>::new(2);
+    /// ```
     pub fn new(capacity: usize) -> (Producer<T>, Consumer<T>) {
-        let capacity = capacity.next_power_of_two();
+        let capacity = capacity.next_power_of_two().max(2);
         let mask = capacity - 1;
 
         let layout = Layout::array::<MaybeUninit<T>>(capacity).expect("Layout calculation failed");
         let buffer = unsafe { alloc(layout) as *mut MaybeUninit<T> };
 
         if buffer.is_null() {
-            panic!("Failed to allocate buffer");
+            handle_alloc_error(layout);
         }
 
         let queue = Arc::new(FastQueue {
@@ -85,6 +130,7 @@ impl<T> FastQueue<T> {
 }
 
 impl<T> Drop for FastQueue<T> {
+    /// Drops all elements in the queue. This will only drop the elements, not the queue itself.
     fn drop(&mut self) {
         let head = self.producer.0.head.load(Ordering::Relaxed);
         let mut tail = self.consumer.0.tail.load(Ordering::Relaxed);
@@ -113,7 +159,15 @@ pub struct Producer<T> {
 unsafe impl<T: Send> Send for Producer<T> {}
 
 impl<T> Producer<T> {
-    /// Returns Ok(()) on success, Err(value) if queue is full
+    /// Pushes a value into the queue. Returns `Ok(())` on success or `Err(T)` if the queue is full.
+    ///
+    /// # Example
+    /// ```
+    /// use fq::FastQueue;
+    /// let (mut producer, mut consumer) = FastQueue::new(1024);
+    /// producer.push(42).unwrap();
+    /// assert_eq!(consumer.pop(), Some(42));
+    /// ```
     #[inline(always)]
     pub fn push(&mut self, value: T) -> Result<(), T> {
         let head = self.queue.producer.0.head.load(Ordering::Relaxed);
@@ -159,6 +213,16 @@ impl<T> Producer<T> {
         Ok(())
     }
 
+    /// Returns the current number of elements in the queue (may be stale)
+    ///
+    /// This function will return stale data when holding a lock on the queue.
+    /// # Example
+    /// ```
+    /// use fq::FastQueue;
+    /// let (mut producer, mut consumer) = FastQueue::new(2);
+    /// producer.push(42).unwrap();
+    /// assert_eq!(consumer.len(), 1);
+    /// ```
     #[inline(always)]
     pub fn len(&self) -> usize {
         let head = self.queue.producer.0.head.load(Ordering::Relaxed);
@@ -166,11 +230,30 @@ impl<T> Producer<T> {
         head.wrapping_sub(tail)
     }
 
+    /// Checks if the queue is empty (may be stale). This function will return `true` if the queue is empty, and `false` otherwise.
+    ///
+    /// This function will return stale data when holding a lock on the queue.
+    /// # Example
+    /// ```
+    /// use fq::FastQueue;
+    /// let (mut producer, mut consumer) = FastQueue::new(2);
+    /// producer.push(42).unwrap();
+    /// assert_eq!(consumer.is_empty(), false);
+    /// ```
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
+    /// Checks if the queue is full (may be stale). This function will return `true` if the queue is full, and `false` otherwise.
+    ///
+    /// # Example
+    /// ```
+    /// use fq::FastQueue;
+    /// let (mut producer, mut consumer) = FastQueue::<usize>::new(2);
+    /// producer.push(42).unwrap();
+    /// assert_eq!(producer.is_full(), false);
+    /// ```
     #[inline(always)]
     pub fn is_full(&self) -> bool {
         self.len() >= self.queue.capacity.0
@@ -184,7 +267,15 @@ pub struct Consumer<T> {
 unsafe impl<T: Send> Send for Consumer<T> {}
 
 impl<T> Consumer<T> {
-    /// Returns None if queue is empty or Some(T)
+    /// Pops a value from the queue. Returns `Some(T)` on success or `None` if the queue is empty.
+    ///
+    /// # Example
+    /// ```
+    /// use fq::FastQueue;
+    /// let (mut producer, mut consumer) = FastQueue::new(1024);
+    /// producer.push(42).unwrap();
+    /// assert_eq!(consumer.pop(), Some(42));
+    /// ```
     #[inline(always)]
     pub fn pop(&mut self) -> Option<T> {
         let tail = self.queue.consumer.0.tail.load(Ordering::Relaxed);
@@ -231,7 +322,15 @@ impl<T> Consumer<T> {
         Some(value)
     }
 
-    /// Peek at the front element without removing it
+    /// Peeks at the front element without removing it.
+    ///
+    /// # Example
+    /// ```
+    /// use fq::FastQueue;
+    /// let (mut producer, mut consumer) = FastQueue::new(2);
+    /// producer.push(42).unwrap();
+    /// assert_eq!(consumer.peek(), Some(&42));
+    /// ```
     #[inline(always)]
     pub fn peek(&self) -> Option<&T> {
         let tail = self.queue.consumer.0.tail.load(Ordering::Relaxed);
@@ -255,7 +354,16 @@ impl<T> Consumer<T> {
         }
     }
 
-    /// Get the current size of the queue (may be stale)
+    /// Returns the current size of the queue (may be stale).
+    ///
+    /// This function will return stale data when holding a lock on the queue.
+    /// # Example
+    /// ```
+    /// use fq::FastQueue;
+    /// let (mut producer, mut consumer) = FastQueue::new(2);
+    /// producer.push(42).unwrap();
+    /// assert_eq!(consumer.len(), 1);
+    /// ```
     #[inline(always)]
     pub fn len(&self) -> usize {
         let head = self.queue.producer.0.head.load(Ordering::Relaxed);
@@ -263,7 +371,16 @@ impl<T> Consumer<T> {
         head.wrapping_sub(tail)
     }
 
-    /// Check if the queue is empty (may be stale)
+    /// Checks if the queue is empty (may be stale). Returns `true` if the queue is empty, and `false` otherwise.
+    ///
+    /// This function will return stale data when holding a lock on the queue.
+    /// # Example
+    /// ```
+    /// use fq::FastQueue;
+    /// let (mut producer, mut consumer) = FastQueue::new(2);
+    /// producer.push(42).unwrap();
+    /// assert_eq!(consumer.is_empty(), false);
+    /// ```
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
@@ -307,6 +424,19 @@ fn prefetch_write(p: *const u8) {
 impl<T> Iterator for Consumer<T> {
     type Item = T;
 
+    /// Pops the next value from the queue. This is equivalent to calling `pop()`.
+    ///
+    /// # Example
+    /// ```
+    /// use fq::FastQueue;
+    /// let (mut producer, mut consumer) = FastQueue::new(4);
+    /// producer.push(42).unwrap();
+    /// producer.push(42).unwrap();
+    /// producer.push(42).unwrap();
+    /// while let Some(value) = consumer.next() {
+    ///     assert_eq!(value, 42);
+    /// }
+    /// ```
     #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
         self.pop()
