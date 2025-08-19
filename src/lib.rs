@@ -169,8 +169,8 @@ impl<T> Producer<T> {
             all(target_arch = "x86_64", target_feature = "sse")
         ))]
         unsafe {
-            let next_index = next_head & self.queue.mask.0;
-            let next_slot = self.queue.buffer.0.add(next_index);
+            let next_index = next_head & self.queue.0.mask.0;
+            let next_slot = self.queue.0.buffer.0.add(next_index);
             prefetch_write(next_slot as *const u8);
         }
 
@@ -282,8 +282,8 @@ impl<T> Consumer<T> {
         ))]
         unsafe {
             let next_tail = tail.wrapping_add(1);
-            let next_index = next_tail & self.queue.mask.0;
-            let next_slot = self.queue.buffer.0.add(next_index);
+            let next_index = next_tail & self.queue.0.mask.0;
+            let next_slot = self.queue.0.buffer.0.add(next_index);
             prefetch_read(next_slot as *const u8);
         }
 
