@@ -166,12 +166,21 @@ impl<T> Producer<T> {
 
         #[cfg(any(
             target_arch = "x86",
-            all(target_arch = "x86_64", target_feature = "sse")
+            all(
+                target_arch = "x86_64",
+                any(target_feature = "prfchw", target_feature = "sse")
+            )
         ))]
         unsafe {
             let next_index = next_head & self.queue.0.mask.0;
             let next_slot = self.queue.0.buffer.0.add(next_index);
-            prefetch_write(next_slot as *const u8);
+            prefetch_read(next_slot as *const u8);
+            // check if prfchw is available
+            if is_x86_feature_detected!("sse") {
+                prefetch_read(next_slot as *const u8);
+            } else {
+                prefetch_write(next_slot as *const u8);
+            }
         }
 
         let cached_tail = unsafe { *self.cached_tail.0.get() };
@@ -332,7 +341,7 @@ impl<T> Consumer<T> {
     #[inline(always)]
     pub fn peek(&self) -> Option<&T> {
         let tail = unsafe { *self.tail.0.get() };
-        let head = self.queue.0.head.0.load(Ordering::Relaxed);
+        let head = self.queue.0.head.0.load(Ordering::Acquire);
 
         if tail == head {
             return None;
@@ -397,7 +406,7 @@ fn prefetch_read(p: *const u8) {
 
 #[cfg(any(
     target_arch = "x86",
-    all(target_arch = "x86_64", target_feature = "sse")
+    all(target_arch = "x86_64", target_feature = "prfchw")
 ))]
 #[inline(always)]
 fn prefetch_write(p: *const u8) {

@@ -61,5 +61,5 @@ jobs:
         with:
           cache-on-failure: true
 
-      - name: bench
+      - name: Run benchmarks
         run: cargo bench --all-features -v
