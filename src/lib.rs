@@ -59,8 +59,6 @@ unsafe impl<T: Send> Sync for FastQueue<T> {}
 impl<T> FastQueue<T> {
     /// Capacity will be rounded up to the next power of two
     pub fn new(capacity: usize) -> (Producer<T>, Consumer<T>) {
-        assert!(capacity > 0, "Capacity must be greater than 0");
-
         let capacity = capacity.next_power_of_two();
         let mask = capacity - 1;
 
@@ -149,6 +147,12 @@ impl<T> Producer<T> {
         unsafe {
             let index = head & self.queue.mask;
             let slot = self.queue.buffer.add(index);
+            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            {
+                let next_index = next_head & self.queue.mask;
+                let next_slot = self.queue.buffer.add(next_index);
+                prefetch_write(next_slot as *const u8);
+            }
             (*slot).as_mut_ptr().write(value);
         }
 
@@ -210,6 +214,12 @@ impl<T> Consumer<T> {
         let value = unsafe {
             let index = tail & self.queue.mask;
             let slot = self.queue.buffer.add(index);
+            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            {
+                let next_index = (tail + 1) & self.queue.mask;
+                let next_slot = self.queue.buffer.add(next_index);
+                prefetch_read(next_slot as *const u8);
+            }
             (*slot).as_ptr().read()
         };
 
@@ -255,12 +265,46 @@ impl<T> Consumer<T> {
     }
 }
 
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[inline(always)]
+fn prefetch_read(p: *const u8) {
+    unsafe {
+        #[cfg(target_arch = "x86")]
+        use std::arch::x86::_mm_prefetch;
+        #[cfg(target_arch = "x86_64")]
+        use std::arch::x86_64::_mm_prefetch;
+
+        const _MM_HINT_T0: i32 = 3; // Prefetch to all cache levels as read
+        _mm_prefetch(p as *const i8, _MM_HINT_T0);
+    }
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[inline(always)]
+fn prefetch_write(p: *const u8) {
+    unsafe {
+        #[cfg(target_arch = "x86")]
+        use std::arch::x86::_mm_prefetch;
+        #[cfg(target_arch = "x86_64")]
+        use std::arch::x86_64::_mm_prefetch;
+
+        const _MM_HINT_ET0: i32 = 7; // Prefetch to all cache levels as write
+        _mm_prefetch(p as *const i8, _MM_HINT_ET0);
+    }
+}
+
 impl<T> Iterator for Consumer<T> {
     type Item = T;
 
     #[inline(always)]
     fn next(&mut self) -> Option<Self::Item> {
         self.pop()
+    }
+
+    #[inline(always)]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let len = self.len();
+        (len, Some(len))
     }
 }
 
