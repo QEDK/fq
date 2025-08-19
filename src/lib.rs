@@ -119,6 +119,16 @@ impl<T> Producer<T> {
         let head = self.queue.producer.0.head.load(Ordering::Relaxed);
         let next_head = head.wrapping_add(1);
 
+        #[cfg(any(
+            target_arch = "x86",
+            all(target_arch = "x86_64", target_feature = "sse")
+        ))]
+        unsafe {
+            let next_index = next_head & self.queue.mask.0;
+            let next_slot = self.queue.buffer.0.add(next_index);
+            prefetch_write(next_slot as *const u8);
+        }
+
         let cached_tail = unsafe { *self.queue.producer.0.cached_tail.get() };
 
         if next_head.wrapping_sub(cached_tail) > self.queue.capacity.0 {
@@ -145,16 +155,6 @@ impl<T> Producer<T> {
             .0
             .head
             .store(next_head, Ordering::Release);
-
-        #[cfg(any(
-            target_arch = "x86",
-            all(target_arch = "x86_64", target_feature = "sse")
-        ))]
-        unsafe {
-            let next_index = next_head & self.queue.mask.0;
-            let next_slot = self.queue.buffer.0.add(next_index);
-            prefetch_write(next_slot as *const u8);
-        }
 
         Ok(())
     }
@@ -189,6 +189,16 @@ impl<T> Consumer<T> {
     pub fn pop(&mut self) -> Option<T> {
         let tail = self.queue.consumer.0.tail.load(Ordering::Relaxed);
 
+        #[cfg(any(
+            target_arch = "x86",
+            all(target_arch = "x86_64", target_feature = "sse")
+        ))]
+        unsafe {
+            let next_index = (tail + 1) & self.queue.mask.0;
+            let next_slot = self.queue.buffer.0.add(next_index);
+            prefetch_read(next_slot as *const u8);
+        }
+
         // Check cached head first (fast path)
         let cached_head = unsafe { *self.queue.consumer.0.cached_head.get() };
 
@@ -217,16 +227,6 @@ impl<T> Consumer<T> {
             .0
             .tail
             .store(next_tail, Ordering::Release);
-
-        #[cfg(any(
-            target_arch = "x86",
-            all(target_arch = "x86_64", target_feature = "sse")
-        ))]
-        unsafe {
-            let next_index = (tail + 1) & self.queue.mask.0;
-            let next_slot = self.queue.buffer.0.add(next_index);
-            prefetch_read(next_slot as *const u8);
-        }
 
         Some(value)
     }

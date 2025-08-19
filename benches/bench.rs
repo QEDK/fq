@@ -1,5 +1,6 @@
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use fq::FastQueue;
+use std::hint::black_box;
 use std::thread;
 
 fn bench_single_threaded_push_pop(c: &mut Criterion) {
@@ -13,11 +14,11 @@ fn bench_single_threaded_push_pop(c: &mut Criterion) {
                 let (mut producer, mut consumer) = FastQueue::<u64>::new(size);
 
                 for i in 0..size {
-                    producer.push(black_box(i as u64)).unwrap();
+                    black_box(producer.push(black_box(i as u64))).unwrap();
                 }
 
                 for _ in 0..size {
-                    black_box(consumer.pop().unwrap());
+                    black_box(consumer.pop()).unwrap();
                 }
             });
         });
@@ -39,7 +40,7 @@ fn bench_push_only(c: &mut Criterion) {
                     let (mut producer, _consumer) = FastQueue::<u64>::new(capacity);
 
                     for i in 0..capacity {
-                        producer.push(black_box(i as u64)).unwrap();
+                        black_box(producer.push(black_box(i as u64))).unwrap();
                     }
                 });
             },
@@ -68,7 +69,7 @@ fn bench_pop_only(c: &mut Criterion) {
                     },
                     |mut consumer| {
                         for _ in 0..capacity {
-                            black_box(consumer.pop().unwrap());
+                            black_box(consumer.pop()).unwrap();
                         }
                     },
                     criterion::BatchSize::SmallInput,
@@ -82,7 +83,7 @@ fn bench_pop_only(c: &mut Criterion) {
 fn bench_concurrent_spsc(c: &mut Criterion) {
     let mut group = c.benchmark_group("concurrent_spsc");
 
-    for messages in [1000, 10000, 100000].iter() {
+    for messages in [500, 5000, 50000].iter() {
         group.throughput(Throughput::Elements(*messages as u64));
 
         group.bench_with_input(
@@ -94,7 +95,7 @@ fn bench_concurrent_spsc(c: &mut Criterion) {
 
                     let producer_handle = thread::spawn(move || {
                         for i in 0..messages {
-                            while producer.push(black_box(i as u64)).is_err() {
+                            while black_box(producer.push(black_box(i as u64))).is_err() {
                                 std::hint::spin_loop();
                             }
                         }
@@ -103,7 +104,7 @@ fn bench_concurrent_spsc(c: &mut Criterion) {
                     let consumer_handle = thread::spawn(move || {
                         let mut count = 0;
                         while count < messages {
-                            if let Some(val) = consumer.pop() {
+                            if let Some(val) = black_box(consumer.pop()) {
                                 black_box(val);
                                 count += 1;
                             } else {
@@ -129,7 +130,7 @@ fn bench_concurrent_spsc_large_messages(c: &mut Criterion) {
         _val2: String,
     }
 
-    for messages in [1000, 10000, 100000].iter() {
+    for messages in [500, 5000, 50000].iter() {
         group.throughput(Throughput::Elements(*messages as u64));
 
         group.bench_with_input(
@@ -141,12 +142,11 @@ fn bench_concurrent_spsc_large_messages(c: &mut Criterion) {
 
                     let producer_handle = thread::spawn(move || {
                         for i in 0..messages {
-                            while producer
-                                .push(black_box(LargeMessage {
-                                    _val1: i as u128,
-                                    _val2: format!("Message {i}"),
-                                }))
-                                .is_err()
+                            while black_box(producer.push(black_box(LargeMessage {
+                                _val1: i as u128,
+                                _val2: format!("Message {i}"),
+                            })))
+                            .is_err()
                             {
                                 std::hint::spin_loop();
                             }
@@ -156,7 +156,7 @@ fn bench_concurrent_spsc_large_messages(c: &mut Criterion) {
                     let consumer_handle = thread::spawn(move || {
                         let mut count = 0;
                         while count < messages {
-                            if let Some(val) = consumer.pop() {
+                            if let Some(val) = black_box(consumer.pop()) {
                                 black_box(val);
                                 count += 1;
                             } else {
@@ -183,12 +183,12 @@ fn bench_burst_operations(c: &mut Criterion) {
 
             // Burst push 16 items
             for i in 0..16 {
-                producer.push(black_box(i)).unwrap();
+                black_box(producer.push(black_box(i))).unwrap();
             }
 
             // Burst pop 16 items
             for _ in 0..16 {
-                black_box(consumer.pop().unwrap());
+                black_box(consumer.pop()).unwrap();
             }
         });
     });
@@ -198,8 +198,8 @@ fn bench_burst_operations(c: &mut Criterion) {
             let (mut producer, mut consumer) = FastQueue::<u64>::new(16);
 
             for i in 0..1000 {
-                producer.push(black_box(i)).unwrap();
-                black_box(consumer.pop().unwrap());
+                black_box(producer.push(black_box(i))).unwrap();
+                black_box(consumer.pop()).unwrap();
             }
         });
     });
@@ -227,13 +227,13 @@ fn bench_wraparound(c: &mut Criterion) {
             |(mut producer, mut consumer)| {
                 // This will cause wraparound in the ring buffer
                 for i in 60..120 {
-                    while producer.push(black_box(i)).is_err() {
+                    while black_box(producer.push(black_box(i))).is_err() {
                         black_box(consumer.pop());
                     }
                 }
 
                 // Consume remaining
-                while let Some(val) = consumer.pop() {
+                while let Some(val) = black_box(consumer.pop()) {
                     black_box(val);
                 }
             },
@@ -253,7 +253,8 @@ fn bench_capacity_scaling(c: &mut Criterion) {
             capacity,
             |b, &capacity| {
                 b.iter(|| {
-                    let (_producer, _consumer) = FastQueue::<u64>::new(black_box(capacity));
+                    let (_producer, _consumer) =
+                        black_box(FastQueue::<u64>::new(black_box(capacity)));
                 });
             },
         );
@@ -277,7 +278,7 @@ fn bench_peek_operations(c: &mut Criterion) {
             |consumer| {
                 // Peek at all elements multiple times
                 for _ in 0..100 {
-                    if let Some(val) = consumer.peek() {
+                    if let Some(val) = black_box(consumer.peek()) {
                         black_box(val);
                     }
                 }
