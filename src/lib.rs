@@ -174,8 +174,6 @@ impl<T> Producer<T> {
         unsafe {
             let next_index = next_head & self.queue.0.mask.0;
             let next_slot = self.queue.0.buffer.0.add(next_index);
-            prefetch_read(next_slot as *const u8);
-            // check if prfchw is available
             if is_x86_feature_detected!("sse") {
                 prefetch_read(next_slot as *const u8);
             } else {
