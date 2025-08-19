@@ -3,7 +3,7 @@ A fast and simple ring-buffer-based single-producer, single-consumer queue with 
 
 ## Installation
 Add this to your `Cargo.toml`:
-```toml
+```TOML
 [dependencies]
 fq = "0.0.2"
 ```
@@ -97,7 +97,7 @@ impl<T> FastQueue<T> {
         let capacity = capacity.next_power_of_two().max(2);
         let mask = capacity - 1;
 
-        let layout = Layout::array::<MaybeUninit<T>>(capacity).expect("Layout calculation failed");
+        let layout = Layout::array::<MaybeUninit<T>>(capacity).expect("layout");
         let buffer = unsafe { alloc(layout) as *mut MaybeUninit<T> };
 
         if buffer.is_null() {
@@ -146,12 +146,13 @@ impl<T> Drop for FastQueue<T> {
 
         unsafe {
             let layout = Layout::array::<MaybeUninit<T>>(self.capacity.0)
-                .expect("Layout calculation failed");
+                .expect("layout");
             dealloc(self.buffer.0 as *mut u8, layout);
         }
     }
 }
 
+/// A producer for the `FastQueue`. This is used to push values into the queue.
 pub struct Producer<T> {
     queue: Arc<FastQueue<T>>,
 }
@@ -164,7 +165,7 @@ impl<T> Producer<T> {
     /// # Example
     /// ```
     /// use fq::FastQueue;
-    /// let (mut producer, mut consumer) = FastQueue::new(1024);
+    /// let (mut producer, mut consumer) = FastQueue::new(2);
     /// producer.push(42).unwrap();
     /// assert_eq!(consumer.pop(), Some(42));
     /// ```
@@ -266,13 +267,14 @@ pub struct Consumer<T> {
 
 unsafe impl<T: Send> Send for Consumer<T> {}
 
+/// A consumer for the `FastQueue`. This is used to pop values from the queue.
 impl<T> Consumer<T> {
     /// Pops a value from the queue. Returns `Some(T)` on success or `None` if the queue is empty.
     ///
     /// # Example
     /// ```
     /// use fq::FastQueue;
-    /// let (mut producer, mut consumer) = FastQueue::new(1024);
+    /// let (mut producer, mut consumer) = FastQueue::new(2);
     /// producer.push(42).unwrap();
     /// assert_eq!(consumer.pop(), Some(42));
     /// ```
