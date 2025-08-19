@@ -39,7 +39,43 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Padding to prevent false sharing
-#[repr(C, align(64))]
+#[cfg_attr(
+    any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        target_arch = "arm64ec",
+        target_arch = "powerpc64",
+    ),
+    repr(C, align(128))
+)]
+#[cfg_attr(
+    any(
+        target_arch = "arm",
+        target_arch = "mips",
+        target_arch = "mips32r6",
+        target_arch = "mips64",
+        target_arch = "mips64r6",
+        target_arch = "sparc",
+        target_arch = "hexagon",
+    ),
+    repr(C, align(32))
+)]
+#[cfg_attr(
+    not(any(
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        target_arch = "arm64ec",
+        target_arch = "powerpc64",
+        target_arch = "arm",
+        target_arch = "mips",
+        target_arch = "mips32r6",
+        target_arch = "mips64",
+        target_arch = "mips64r6",
+        target_arch = "sparc",
+        target_arch = "hexagon",
+    )),
+    repr(C, align(64))
+)]
 struct CachePadded<T>(T);
 
 /// A fast lock-free single-producer, single-consumer queue
