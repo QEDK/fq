@@ -1,0 +1,22 @@
+[package]
+name = "fq-examples"
+version = "0.0.1"
+edition = "2024"
+
+[profile.maxperf]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+
+[dependencies]
+anyhow = { version = "1.0" }
+tokio = { version = "1.47", features = ["macros", "rt-multi-thread", "parking_lot", "time"] }
+fq = { path = "../" }
+
+[[bin]]
+name = "tokio-threads"
+path = "src/tokio_threads.rs"
+
+[[bin]]
+name = "std-threads"
+path = "src/std_threads.rs"
