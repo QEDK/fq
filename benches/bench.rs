@@ -126,8 +126,8 @@ fn bench_concurrent_spsc_large_messages(c: &mut Criterion) {
     let mut group = c.benchmark_group("concurrent_spsc_large_messages");
 
     struct LargeMessage {
-        _val1: u128,
-        _val2: String,
+        _id: u128,
+        _id_str: String,
     }
 
     for messages in [500, 5000, 50000].iter() {
@@ -143,8 +143,8 @@ fn bench_concurrent_spsc_large_messages(c: &mut Criterion) {
                     let producer_handle = thread::spawn(move || {
                         for i in 0..messages {
                             while black_box(producer.push(black_box(LargeMessage {
-                                _val1: i as u128,
-                                _val2: format!("Message {i}"),
+                                _id: i as u128,
+                                _id_str: format!("Message {i}"),
                             })))
                             .is_err()
                             {
