@@ -1,5 +1,5 @@
-use fq;
 use anyhow::Error;
+use fq;
 
 fn main() -> Result<(), Error> {
     const COUNT: usize = 1_000_000;
@@ -9,8 +9,7 @@ fn main() -> Result<(), Error> {
 
     let sender = std::thread::spawn(move || {
         for i in 0..COUNT {
-            producer.push(i)
-                .expect("Unable to send to queue");
+            producer.push(i).expect("Unable to send to queue");
         }
         println!("Sent {COUNT} messages in {:?}", instant.elapsed());
     });
@@ -35,7 +34,11 @@ fn main() -> Result<(), Error> {
     receiver.join().unwrap();
 
     let elapsed = instant.elapsed();
-    println!("Completed in {:?}, average message latency: {:?}", elapsed, elapsed / COUNT as u32);
+    println!(
+        "Completed in {:?}, average message latency: {:?}",
+        elapsed,
+        elapsed / COUNT as u32
+    );
 
     Ok(())
 }

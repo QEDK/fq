@@ -1,6 +1,6 @@
+use anyhow::Error;
 use fq;
 use tokio;
-use anyhow::Error;
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
@@ -11,8 +11,7 @@ async fn main() -> Result<(), Error> {
 
     let sender = tokio::spawn(async move {
         for i in 0..COUNT {
-            producer.push(i)
-                .expect("Unable to send to queue");
+            producer.push(i).expect("Unable to send to queue");
         }
         println!("Sent {COUNT} messages in {:?}", instant.elapsed());
     });
@@ -36,7 +35,11 @@ async fn main() -> Result<(), Error> {
     tokio::join!(sender, receiver);
 
     let elapsed = instant.elapsed();
-    println!("Completed in {:?}, average message latency: {:?}", elapsed, elapsed / COUNT as u32);
+    println!(
+        "Completed in {:?}, average message latency: {:?}",
+        elapsed,
+        elapsed / COUNT as u32
+    );
 
     Ok(())
 }
