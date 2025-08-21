@@ -191,7 +191,7 @@ impl<T> Drop for FastQueue<T> {
     }
 }
 
-/// A producer for the `FastQueue`. This is used to push values into the queue.
+/// A producer for the `FastQueue`. This is used to send elements to the queue.
 pub struct Producer<T> {
     queue: CachePadded<Arc<FastQueue<T>>>,
     head: CachePadded<UnsafeCell<usize>>,
@@ -201,6 +201,7 @@ pub struct Producer<T> {
 
 unsafe impl<T: Send> Send for Producer<T> {}
 
+/// A producer for the `FastQueue`. This is used to send elements to the queue.
 impl<T> Producer<T> {
     /// Pushes a value into the queue. Returns `Ok(())` on success or `Err(T)` if the queue is full.
     ///
@@ -318,6 +319,7 @@ impl<T> Producer<T> {
     }
 }
 
+/// A consumer for the `FastQueue`. This is used to receive items from the queue.
 pub struct Consumer<T> {
     queue: CachePadded<Arc<FastQueue<T>>>,
     tail: CachePadded<UnsafeCell<usize>>,
@@ -327,7 +329,7 @@ pub struct Consumer<T> {
 
 unsafe impl<T: Send> Send for Consumer<T> {}
 
-/// A consumer for the `FastQueue`. This is used to pop values from the queue.
+/// A consumer for the `FastQueue`. This is used to receive items from the queue.
 impl<T> Consumer<T> {
     /// Pops a value from the queue. Returns `Some(T)` on success or `None` if the queue is empty.
     ///
