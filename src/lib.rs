@@ -5,7 +5,7 @@ A fast and simple ring-buffer-based single-producer, single-consumer queue with 
 Add this to your `Cargo.toml`:
 ```TOML
 [dependencies]
-fq = "0.0.2"
+fq = "0.0.3"
 ```
 
 ## Quickstart
@@ -29,6 +29,22 @@ let receiver = thread::spawn(move || {
 sender.join().expect("The sender thread has panicked");
 receiver.join().expect("The receiver thread has panicked");
 ```
+
+## How does it work?
+The ring buffer structure allows for a contiguous data structure. The idea is that if we are able to get extreme
+cache locality, we can improve performance by reducing cache misses. This is also the reason why if you use
+smart pointers like `Box<T>`, performance *may* degrade since cache locality gets degraded. For very large
+`T` types, you are more limited by `memcpy()` performance and less from queue implementations. As such,
+ring buffers can be considered strongly optimized for data of a few word sizes with some non-linear performance
+degradation for larger sizes. Additional optimizations are provided for CPUs that support `sse` and `prfchw`
+instructions. As and when Rust `std` provides more relevant instructions, they will be added. This is simply a
+high-level explanation of some of the techniques employed by this crate, you can read the code to gain a better
+understanding of what's happening under the hood.
+
+## Profiles
+The crate is fully synchronous and runtime-agnostic. We are heavily reliant on `std` for memory management, so
+it's unlikely that we will support `#[no_std]` runtimes anytime soon. You should be using the `release` or
+`maxperf` profiles for optimal performance.
 */
 use std::alloc::{Layout, alloc, dealloc, handle_alloc_error};
 use std::cell::UnsafeCell;

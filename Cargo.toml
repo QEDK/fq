@@ -1,6 +1,6 @@
 [package]
 name = "fq"
-version = "0.0.2"
+version = "0.0.3"
 authors = ["QEDK <hi@qedk.xyz>"]
 edition = "2024"
 description = "A fast and simple ring-buffer-based single-producer, single-consumer queue with no dependencies. You can use this to write Rust programs with low-latency message passing."
