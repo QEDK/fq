@@ -210,11 +210,11 @@ impl<T> Producer<T> {
         unsafe {
             let next_index = next_head & self.queue.0.mask.0;
             let next_slot = self.queue.0.buffer.0.add(next_index);
-            #[cfg(target_feature = "sse")]
+            #[cfg(all(target_arch = "x86_64", target_feature = "sse"))]
             {
                 prefetch_read(next_slot as *const u8);
             }
-            #[cfg(target_feature = "prfchw")]
+            #[cfg(any(target_arch = "x86", target_feature = "prfchw"))]
             {
                 prefetch_write(next_slot as *const u8);
             }
@@ -258,6 +258,7 @@ impl<T> Producer<T> {
     /// ```
     /// use fq::FastQueue;
     /// let (mut producer, mut consumer) = FastQueue::new(2);
+    /// assert_eq!(consumer.len(), 0);
     /// producer.push(42).unwrap();
     /// assert_eq!(consumer.len(), 1);
     /// ```
@@ -275,8 +276,9 @@ impl<T> Producer<T> {
     /// ```
     /// use fq::FastQueue;
     /// let (mut producer, mut consumer) = FastQueue::new(2);
+    /// assert!(consumer.is_empty());
     /// producer.push(42).unwrap();
-    /// assert_eq!(consumer.is_empty(), false);
+    /// assert!(!consumer.is_empty());
     /// ```
     #[inline(always)]
     pub fn is_empty(&self) -> bool {
@@ -289,8 +291,10 @@ impl<T> Producer<T> {
     /// ```
     /// use fq::FastQueue;
     /// let (mut producer, mut consumer) = FastQueue::<usize>::new(2);
-    /// producer.push(42).unwrap();
+    /// producer.push(42).unwrap(); // ⚠️ Prefer handling the error over using unwrap()
     /// assert_eq!(producer.is_full(), false);
+    /// producer.push(43).unwrap();
+    /// assert_eq!(producer.is_full(), true);
     /// ```
     #[inline(always)]
     pub fn is_full(&self) -> bool {
@@ -398,6 +402,7 @@ impl<T> Consumer<T> {
     /// ```
     /// use fq::FastQueue;
     /// let (mut producer, mut consumer) = FastQueue::new(2);
+    /// assert_eq!(consumer.len(), 0);
     /// producer.push(42).unwrap();
     /// assert_eq!(consumer.len(), 1);
     /// ```
@@ -415,6 +420,7 @@ impl<T> Consumer<T> {
     /// ```
     /// use fq::FastQueue;
     /// let (mut producer, mut consumer) = FastQueue::new(2);
+    /// assert_eq!(consumer.is_empty(), true);
     /// producer.push(42).unwrap();
     /// assert_eq!(consumer.is_empty(), false);
     /// ```
@@ -424,6 +430,7 @@ impl<T> Consumer<T> {
     }
 }
 
+/// Helper function to prefetch read operation on supported architectures.
 #[cfg(any(
     target_arch = "x86",
     all(target_arch = "x86_64", target_feature = "sse")
@@ -441,6 +448,7 @@ fn prefetch_read(p: *const u8) {
     }
 }
 
+/// Helper function to prefetch a write operation on supported architectures.
 #[cfg(any(
     target_arch = "x86",
     all(target_arch = "x86_64", target_feature = "prfchw")
@@ -479,10 +487,11 @@ impl<T> Iterator for Consumer<T> {
         self.pop()
     }
 
+    /// Provides a size hint (may be stale)
     #[inline(always)]
     fn size_hint(&self) -> (usize, Option<usize>) {
-        let len = self.len();
-        (len, Some(len))
+        // (lower bound, upper bound)
+        (self.len(), None)
     }
 }
 

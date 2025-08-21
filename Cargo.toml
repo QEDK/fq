@@ -23,7 +23,7 @@ lto = "fat"
 codegen-units = 1
 
 [dev-dependencies]
-criterion = { version = "0.7", features = ["html_reports"] }
+criterion = { version = "0.7" }
 
 [[bench]]
 name = "bench"
