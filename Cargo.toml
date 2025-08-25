@@ -31,12 +31,12 @@ codegen-units = 1
 [dev-dependencies]
 criterion = { version = "0.7" }
 
-[[bench]]
-name = "bench"
-harness = false
-
 [build-dependencies]
 rustc_version = "0.4"
 
 [features]
 unstable = []
+
+[[bench]]
+name = "bench"
+harness = false
