@@ -187,6 +187,7 @@ impl<T> FastQueue<T> {
     /// }
     /// let (producer, consumer) = FastQueue::<Message>::new(2);
     /// ```
+    #[allow(clippy::new_ret_no_self)]
     pub fn new(capacity: usize) -> (Producer<T>, Consumer<T>) {
         let capacity = capacity.next_power_of_two().max(2);
         let mask = capacity - 1;
@@ -377,7 +378,7 @@ impl<T> Producer<T> {
             core::arch::x86_64::_mm_prefetch(_slot as *const i8, core::arch::x86_64::_MM_HINT_ET0);
         }
 
-        #[cfg(all(target_arch = "x86"))]
+        #[cfg(target_arch = "x86")]
         unsafe {
             core::arch::x86::_mm_prefetch(_slot as *const i8, core::arch::x86::_MM_HINT_ET0);
         }
@@ -516,12 +517,12 @@ impl<T> Consumer<T> {
         let slot_index = index & self.queue.0.mask.0;
         let _slot = unsafe { self.queue.0.buffer.0.add(slot_index) };
 
-        #[cfg(any(all(target_arch = "x86_64", target_feature = "sse")))]
+        #[cfg(all(target_arch = "x86_64", target_feature = "sse"))]
         unsafe {
             core::arch::x86_64::_mm_prefetch(_slot as *const i8, core::arch::x86_64::_MM_HINT_T0);
         }
 
-        #[cfg(all(nightly, target_arch = "x86"))]
+        #[cfg(target_arch = "x86")]
         unsafe {
             core::arch::x86::_mm_prefetch(_slot as *const i8, core::arch::x86::_MM_HINT_T0);
         }
