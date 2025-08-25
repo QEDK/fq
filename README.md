@@ -9,7 +9,7 @@ this to write Rust programs with low-latency message passing.
 Add this to your `Cargo.toml`:
 ```TOML
 [dependencies]
-fq = "0.0.3"
+fq = "0.0.4"
 ```
 
 ## Quickstart
@@ -58,6 +58,14 @@ it's unlikely that we will support `#[no_std]` runtimes anytime soon. You should
 * This crate will always support generic types.
 * This crate will always provide a wait-free **and** lock-free API.
 * This crate will use unsafe Rust where possible for maximal throughput.
+
+## CPU Features
+On `x86` and `x86_64` targets, prefetch instructions are available on the `stable` toolchain. To make use of prefetch instructions on the `aarch64` target, you should enable the `unstable` feature and use the `nightly`
+toolchain.
+```TOML
+[dependencies]
+fq = { version = "0.0.4", features = ["unstable"] }
+```
 
 ## Benchmarks
 Benchmarks are strictly difficult due to the nature of the program, it's somewhat simple to do a same-CPU
