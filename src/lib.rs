@@ -68,13 +68,13 @@ PRs for additional benchmarks are welcome.
 */
 #![cfg_attr(nightly, feature(stdarch_aarch64_prefetch))]
 use core::alloc::Layout;
-use std::alloc::{alloc, dealloc, handle_alloc_error};
 use core::cell::UnsafeCell;
 use core::marker::PhantomData;
 use core::mem::MaybeUninit;
 use core::ptr;
-use std::sync::Arc;
 use core::sync::atomic::{AtomicUsize, Ordering};
+use std::alloc::{alloc, dealloc, handle_alloc_error};
+use std::sync::Arc;
 
 /// Padding to prevent false sharing
 #[cfg_attr(
@@ -191,10 +191,9 @@ impl<T> FastQueue<T> {
         let capacity = capacity.next_power_of_two().max(2);
         let mask = capacity - 1;
 
-        let layout = Layout::from_size_align(
-            capacity * size_of::<MaybeUninit<T>>(),
-            CACHE_LINE_SIZE,
-        ).expect("layout");
+        let layout =
+            Layout::from_size_align(capacity * size_of::<MaybeUninit<T>>(), CACHE_LINE_SIZE)
+                .expect("layout");
         let buffer = unsafe { alloc(layout) as *mut MaybeUninit<T> };
 
         if buffer.is_null() {
@@ -247,7 +246,8 @@ impl<T> Drop for FastQueue<T> {
             let layout = Layout::from_size_align(
                 self.capacity.0 * size_of::<MaybeUninit<T>>(),
                 CACHE_LINE_SIZE,
-            ).expect("layout");
+            )
+            .expect("layout");
             dealloc(self.buffer.0 as *mut u8, layout);
         }
     }
@@ -369,36 +369,25 @@ impl<T> Producer<T> {
 
         #[cfg(all(target_arch = "x86_64", target_feature = "sse"))]
         unsafe {
-            core::arch::x86_64::_mm_prefetch(
-                _slot as *const i8,
-                core::arch::x86_64::_MM_HINT_T0,
-            );
+            core::arch::x86_64::_mm_prefetch(_slot as *const i8, core::arch::x86_64::_MM_HINT_T0);
         }
 
         #[cfg(all(target_arch = "x86_64", target_feature = "prfchw"))]
         unsafe {
-            core::arch::x86_64::_mm_prefetch(
-                _slot as *const i8,
-                core::arch::x86_64::_MM_HINT_ET0,
-            );
+            core::arch::x86_64::_mm_prefetch(_slot as *const i8, core::arch::x86_64::_MM_HINT_ET0);
         }
 
         #[cfg(all(target_arch = "x86"))]
         unsafe {
-            core::arch::x86::_mm_prefetch(
-                _slot as *const i8,
-                core::arch::x86::_MM_HINT_ET0,
-            );
+            core::arch::x86::_mm_prefetch(_slot as *const i8, core::arch::x86::_MM_HINT_ET0);
         }
-        
+
         #[cfg(all(feature = "unstable", nightly, target_arch = "aarch64"))]
         unsafe {
             core::arch::aarch64::_prefetch::<
                 { core::arch::aarch64::_PREFETCH_WRITE },
                 { core::arch::aarch64::_PREFETCH_LOCALITY0 },
-            >(
-                _slot as *const i8,
-            );
+            >(_slot as *const i8);
         }
     }
 }
@@ -529,18 +518,12 @@ impl<T> Consumer<T> {
 
         #[cfg(any(all(target_arch = "x86_64", target_feature = "sse")))]
         unsafe {
-            core::arch::x86_64::_mm_prefetch(
-                _slot as *const i8,
-                core::arch::x86_64::_MM_HINT_T0,
-            );
+            core::arch::x86_64::_mm_prefetch(_slot as *const i8, core::arch::x86_64::_MM_HINT_T0);
         }
 
         #[cfg(all(nightly, target_arch = "x86"))]
         unsafe {
-            core::arch::x86::_mm_prefetch(
-                _slot as *const i8,
-                core::arch::x86::_MM_HINT_T0,
-            );
+            core::arch::x86::_mm_prefetch(_slot as *const i8, core::arch::x86::_MM_HINT_T0);
         }
 
         #[cfg(all(feature = "unstable", nightly, target_arch = "aarch64"))]
@@ -548,9 +531,7 @@ impl<T> Consumer<T> {
             core::arch::aarch64::_prefetch::<
                 { core::arch::aarch64::_PREFETCH_READ },
                 { core::arch::aarch64::_PREFETCH_LOCALITY0 },
-            >(
-                _slot as *const i8,
-            );
+            >(_slot as *const i8);
         }
     }
 }
