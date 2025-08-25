@@ -9,7 +9,7 @@ this to write Rust programs with low-latency message passing.
 Add this to your `Cargo.toml`:
 ```TOML
 [dependencies]
-fq = "0.0.4"
+fq = "0.0.5"
 ```
 
 ## Quickstart

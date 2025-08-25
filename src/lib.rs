@@ -66,11 +66,14 @@ bench but performance will still be affected based on the core type and cache co
 provided in the [benches](benches/bench.rs) directory and can be run with `cargo bench`. Contributions via
 PRs for additional benchmarks are welcome.
 */
-#![cfg_attr(nightly, feature(stdarch_aarch64_prefetch))]
+#![cfg_attr(
+    all(nightly, target_arch = "aarch64"),
+    feature(stdarch_aarch64_prefetch)
+)]
 use core::alloc::Layout;
 use core::cell::UnsafeCell;
 use core::marker::PhantomData;
-use core::mem::MaybeUninit;
+use core::mem::{MaybeUninit, size_of};
 use core::ptr;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use std::alloc::{alloc, dealloc, handle_alloc_error};
