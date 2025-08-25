@@ -5,7 +5,7 @@ A fast and simple ring-buffer-based single-producer, single-consumer queue with 
 Add this to your `Cargo.toml`:
 ```TOML
 [dependencies]
-fq = "0.0.4"
+fq = "0.0.5"
 ```
 
 ## Quickstart
@@ -57,7 +57,7 @@ On `x86` and `x86_64` targets, prefetch instructions are available on the `stabl
 toolchain.
 ```TOML
 [dependencies]
-fq = { version = "0.0.4", features = ["unstable"] }
+fq = { version = "0.0.5", features = ["unstable"] }
 ```
 
 ## Benchmarks

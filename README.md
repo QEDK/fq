@@ -1,9 +1,10 @@
 # FastQueue (fq)
+[![Build Status](https://github.com/QEDK/fq/actions/workflows/ci.yml/badge.svg)](https://github.com/QEDK/fq/actions/workflows/ci.yml) [![Crates.io](https://img.shields.io/crates/l/fq?color=black)](LICENSE-MIT) [![Crates.io](https://img.shields.io/crates/v/fq?color=black)](https://crates.io/crates/fq) [![Released API docs](https://docs.rs/fq/badge.svg)](https://docs.rs/fq) [![Maintenance](https://img.shields.io/maintenance/yes/2025)](https://github.com/QEDK/fq)
 A fast and simple ring-buffer-based single-producer, single-consumer queue with no dependencies. You can use
 this to write Rust programs with low-latency message passing. 
 
-> [!IMPORTANT]
-> This crate is highly experimental.
+> [!NOTE]
+> This crate is experimental.
 
 ## Installation
 Add this to your `Cargo.toml`:
@@ -64,7 +65,7 @@ On `x86` and `x86_64` targets, prefetch instructions are available on the `stabl
 toolchain.
 ```TOML
 [dependencies]
-fq = { version = "0.0.4", features = ["unstable"] }
+fq = { version = "0.0.5", features = ["unstable"] }
 ```
 
 ## Benchmarks
