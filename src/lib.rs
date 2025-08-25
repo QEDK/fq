@@ -5,7 +5,7 @@ A fast and simple ring-buffer-based single-producer, single-consumer queue with 
 Add this to your `Cargo.toml`:
 ```TOML
 [dependencies]
-fq = "0.0.3"
+fq = "0.0.4"
 ```
 
 ## Quickstart
@@ -45,14 +45,36 @@ understanding of what's happening under the hood.
 The crate is fully synchronous and runtime-agnostic. We are heavily reliant on `std` for memory management, so
 it's unlikely that we will support `#[no_std]` runtimes anytime soon. You should be using the `release` or
 `maxperf` profiles for optimal performance.
+
+## Principles
+* This crate will always prioritize message throughput over memory usage.
+* This crate will always support generic types.
+* This crate will always provide a wait-free **and** lock-free API.
+* This crate will use unsafe Rust where possible for maximal throughput.
+
+## CPU Features
+On `x86` and `x86_64` targets, prefetch instructions are available on the `stable` toolchain. To make use of prefetch instructions on the `aarch64` target, you should enable the `unstable` feature and use the `nightly`
+toolchain.
+```TOML
+[dependencies]
+fq = { version = "0.0.4", features = ["unstable"] }
+```
+
+## Benchmarks
+Benchmarks are strictly difficult due to the nature of the program, it's somewhat simple to do a same-CPU
+bench but performance will still be affected based on the core type and cache contention. Benchmarks are
+provided in the [benches](benches/bench.rs) directory and can be run with `cargo bench`. Contributions via
+PRs for additional benchmarks are welcome.
 */
-use std::alloc::{Layout, alloc, dealloc, handle_alloc_error};
-use std::cell::UnsafeCell;
-use std::marker::PhantomData;
-use std::mem::MaybeUninit;
-use std::ptr;
+#![cfg_attr(nightly, feature(stdarch_aarch64_prefetch))]
+use core::alloc::Layout;
+use std::alloc::{alloc, dealloc, handle_alloc_error};
+use core::cell::UnsafeCell;
+use core::marker::PhantomData;
+use core::mem::MaybeUninit;
+use core::ptr;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 /// Padding to prevent false sharing
 #[cfg_attr(
@@ -93,6 +115,40 @@ use std::sync::atomic::{AtomicUsize, Ordering};
     repr(C, align(64))
 )]
 struct CachePadded<T>(T);
+
+#[cfg(any(
+    target_arch = "x86_64",
+    target_arch = "aarch64",
+    target_arch = "arm64ec",
+    target_arch = "powerpc64",
+))]
+const CACHE_LINE_SIZE: usize = 128;
+
+#[cfg(any(
+    target_arch = "arm",
+    target_arch = "mips",
+    target_arch = "mips32r6",
+    target_arch = "mips64",
+    target_arch = "mips64r6",
+    target_arch = "sparc",
+    target_arch = "hexagon",
+))]
+const CACHE_LINE_SIZE: usize = 32;
+
+#[cfg(not(any(
+    target_arch = "x86_64",
+    target_arch = "aarch64",
+    target_arch = "arm64ec",
+    target_arch = "powerpc64",
+    target_arch = "arm",
+    target_arch = "mips",
+    target_arch = "mips32r6",
+    target_arch = "mips64",
+    target_arch = "mips64r6",
+    target_arch = "sparc",
+    target_arch = "hexagon",
+)))]
+const CACHE_LINE_SIZE: usize = 64;
 
 /// A fast lock-free single-producer, single-consumer queue
 pub struct FastQueue<T> {
@@ -135,7 +191,10 @@ impl<T> FastQueue<T> {
         let capacity = capacity.next_power_of_two().max(2);
         let mask = capacity - 1;
 
-        let layout = Layout::array::<MaybeUninit<T>>(capacity).expect("layout");
+        let layout = Layout::from_size_align(
+            capacity * size_of::<MaybeUninit<T>>(),
+            CACHE_LINE_SIZE,
+        ).expect("layout");
         let buffer = unsafe { alloc(layout) as *mut MaybeUninit<T> };
 
         if buffer.is_null() {
@@ -185,7 +244,10 @@ impl<T> Drop for FastQueue<T> {
         }
 
         unsafe {
-            let layout = Layout::array::<MaybeUninit<T>>(self.capacity.0).expect("layout");
+            let layout = Layout::from_size_align(
+                self.capacity.0 * size_of::<MaybeUninit<T>>(),
+                CACHE_LINE_SIZE,
+            ).expect("layout");
             dealloc(self.buffer.0 as *mut u8, layout);
         }
     }
@@ -217,25 +279,7 @@ impl<T> Producer<T> {
         let head = unsafe { *self.head.0.get() };
         let next_head = head.wrapping_add(1);
 
-        #[cfg(any(
-            target_arch = "x86",
-            all(
-                target_arch = "x86_64",
-                any(target_feature = "prfchw", target_feature = "sse")
-            )
-        ))]
-        unsafe {
-            let next_index = next_head & self.queue.0.mask.0;
-            let next_slot = self.queue.0.buffer.0.add(next_index);
-            #[cfg(all(target_arch = "x86_64", target_feature = "sse"))]
-            {
-                prefetch_read(next_slot as *const u8);
-            }
-            #[cfg(any(target_arch = "x86", target_feature = "prfchw"))]
-            {
-                prefetch_write(next_slot as *const u8);
-            }
-        }
+        self.prefetch_write(next_head);
 
         let cached_tail = unsafe { *self.cached_tail.0.get() };
 
@@ -317,6 +361,46 @@ impl<T> Producer<T> {
     pub fn is_full(&self) -> bool {
         self.len() >= self.queue.0.capacity.0
     }
+
+    #[inline(always)]
+    fn prefetch_write(&self, index: usize) {
+        let slot_index = index & self.queue.0.mask.0;
+        let _slot = unsafe { self.queue.0.buffer.0.add(slot_index) };
+
+        #[cfg(all(target_arch = "x86_64", target_feature = "sse"))]
+        unsafe {
+            core::arch::x86_64::_mm_prefetch(
+                _slot as *const i8,
+                core::arch::x86_64::_MM_HINT_T0,
+            );
+        }
+
+        #[cfg(all(target_arch = "x86_64", target_feature = "prfchw"))]
+        unsafe {
+            core::arch::x86_64::_mm_prefetch(
+                _slot as *const i8,
+                core::arch::x86_64::_MM_HINT_ET0,
+            );
+        }
+
+        #[cfg(all(target_arch = "x86"))]
+        unsafe {
+            core::arch::x86::_mm_prefetch(
+                _slot as *const i8,
+                core::arch::x86::_MM_HINT_ET0,
+            );
+        }
+        
+        #[cfg(all(feature = "unstable", nightly, target_arch = "aarch64"))]
+        unsafe {
+            core::arch::aarch64::_prefetch::<
+                { core::arch::aarch64::_PREFETCH_WRITE },
+                { core::arch::aarch64::_PREFETCH_LOCALITY0 },
+            >(
+                _slot as *const i8,
+            );
+        }
+    }
 }
 
 /// A consumer for the `FastQueue`. This is used to receive items from the queue.
@@ -344,16 +428,7 @@ impl<T> Consumer<T> {
     pub fn pop(&mut self) -> Option<T> {
         let tail = unsafe { *self.tail.0.get() };
 
-        #[cfg(any(
-            target_arch = "x86",
-            all(target_arch = "x86_64", target_feature = "sse")
-        ))]
-        unsafe {
-            let next_tail = tail.wrapping_add(1);
-            let next_index = next_tail & self.queue.0.mask.0;
-            let next_slot = self.queue.0.buffer.0.add(next_index);
-            prefetch_read(next_slot as *const u8);
-        }
+        self.prefetch_read(tail.wrapping_add(1));
 
         // Check cached head first (fast path)
         let cached_head = unsafe { *self.cached_head.0.get() };
@@ -446,41 +521,37 @@ impl<T> Consumer<T> {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
-}
 
-/// Helper function to prefetch read operation on supported architectures.
-#[cfg(any(
-    target_arch = "x86",
-    all(target_arch = "x86_64", target_feature = "sse")
-))]
-#[inline(always)]
-fn prefetch_read(p: *const u8) {
-    unsafe {
-        #[cfg(target_arch = "x86")]
-        use std::arch::x86::_mm_prefetch;
-        #[cfg(target_arch = "x86_64")]
-        use std::arch::x86_64::_mm_prefetch;
+    #[inline(always)]
+    fn prefetch_read(&self, index: usize) {
+        let slot_index = index & self.queue.0.mask.0;
+        let _slot = unsafe { self.queue.0.buffer.0.add(slot_index) };
 
-        const _MM_HINT_T0: i32 = 3; // Prefetch to all cache levels as read
-        _mm_prefetch(p as *const i8, _MM_HINT_T0);
-    }
-}
+        #[cfg(any(all(target_arch = "x86_64", target_feature = "sse")))]
+        unsafe {
+            core::arch::x86_64::_mm_prefetch(
+                _slot as *const i8,
+                core::arch::x86_64::_MM_HINT_T0,
+            );
+        }
 
-/// Helper function to prefetch a write operation on supported architectures.
-#[cfg(any(
-    target_arch = "x86",
-    all(target_arch = "x86_64", target_feature = "prfchw")
-))]
-#[inline(always)]
-fn prefetch_write(p: *const u8) {
-    unsafe {
-        #[cfg(target_arch = "x86")]
-        use std::arch::x86::_mm_prefetch;
-        #[cfg(target_arch = "x86_64")]
-        use std::arch::x86_64::_mm_prefetch;
+        #[cfg(all(nightly, target_arch = "x86"))]
+        unsafe {
+            core::arch::x86::_mm_prefetch(
+                _slot as *const i8,
+                core::arch::x86::_MM_HINT_T0,
+            );
+        }
 
-        const _MM_HINT_ET0: i32 = 7; // Prefetch to all cache levels as write
-        _mm_prefetch(p as *const i8, _MM_HINT_ET0);
+        #[cfg(all(feature = "unstable", nightly, target_arch = "aarch64"))]
+        unsafe {
+            core::arch::aarch64::_prefetch::<
+                { core::arch::aarch64::_PREFETCH_READ },
+                { core::arch::aarch64::_PREFETCH_LOCALITY0 },
+            >(
+                _slot as *const i8,
+            );
+        }
     }
 }
 
