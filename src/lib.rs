@@ -375,10 +375,7 @@ impl<T> Producer<T> {
 
         #[cfg(all(target_arch = "x86_64", target_feature = "prfchw"))]
         unsafe {
-            core::arch::x86_64::_mm_prefetch(
-                _slot as *const i8,
-                core::arch::x86_64::_MM_HINT_ET0,
-            );
+            core::arch::x86_64::_mm_prefetch(_slot as *const i8, core::arch::x86_64::_MM_HINT_ET0);
         }
 
         #[cfg(target_arch = "x86")]
