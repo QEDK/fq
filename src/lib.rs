@@ -291,11 +291,8 @@ impl<T> Producer<T> {
             // Reload actual tail (slow path)
             let tail = self.queue.0.tail.0.load(Ordering::Acquire);
 
-            if tail != cached_tail {
-                // Update cached tail
-                unsafe {
-                    *self.cached_tail.0.get() = tail;
-                }
+            unsafe {
+                *self.cached_tail.0.get() = tail;
             }
 
             // Check again with fresh tail
@@ -378,7 +375,10 @@ impl<T> Producer<T> {
 
         #[cfg(all(target_arch = "x86_64", target_feature = "prfchw"))]
         unsafe {
-            core::arch::x86_64::_mm_prefetch(_slot as *const i8, core::arch::x86_64::_MM_HINT_ET0);
+            core::arch::x86_64::_mm_prefetch(
+                _slot as *const i8,
+                core::arch::x86_64::_MM_HINT_ET0,
+            );
         }
 
         #[cfg(target_arch = "x86")]
@@ -430,11 +430,8 @@ impl<T> Consumer<T> {
             // Reload actual head (slow path)
             let head = self.queue.0.head.0.load(Ordering::Acquire);
 
-            if head != cached_head {
-                // Update cached head
-                unsafe {
-                    *self.cached_head.0.get() = head;
-                }
+            unsafe {
+                *self.cached_head.0.get() = head;
             }
 
             // Check if still empty
@@ -450,7 +447,9 @@ impl<T> Consumer<T> {
         };
 
         let next_tail = tail.wrapping_add(1);
-        unsafe { *self.tail.0.get() = next_tail };
+        unsafe {
+            *self.tail.0.get() = next_tail;
+        }
         self.queue.0.tail.0.store(next_tail, Ordering::Release);
 
         Some(value)
