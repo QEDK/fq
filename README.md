@@ -1,18 +1,8 @@
 # FastQueue (fq)
-[![Build Status](https://github.com/QEDK/fq/actions/workflows/ci.yml/badge.svg)](https://github.com/QEDK/fq/actions/workflows/ci.yml) [![Crates.io](https://img.shields.io/crates/l/fq?color=black)](LICENSE-MIT) [![Crates.io](https://img.shields.io/crates/v/fq?color=black)](https://crates.io/crates/fq) [![Released API docs](https://docs.rs/fq/badge.svg)](https://docs.rs/fq) [![Maintenance](https://img.shields.io/maintenance/yes/2025)](https://github.com/QEDK/fq)
+[![Build Status](https://github.com/QEDK/fq/actions/workflows/ci.yml/badge.svg)](https://github.com/QEDK/fq/actions/workflows/ci.yml) [![Crates.io](https://img.shields.io/crates/l/fq?color=black)](LICENSE-MIT) [![Crates.io](https://img.shields.io/crates/v/fq?color=black)](https://crates.io/crates/fq) [![Released API docs](https://docs.rs/fq/badge.svg)](https://docs.rs/fq)
 
 A fast and simple ring-buffer-based single-producer, single-consumer queue with no dependencies. You can use
-this to write Rust programs with low-latency message passing. 
-
-> [!NOTE]
-> This crate is experimental.
-
-## Installation
-Add this to your `Cargo.toml`:
-```TOML
-[dependencies]
-fq = "0.0.5"
-```
+this to write Rust programs with low-latency message passing.
 
 ## Quickstart
 ```rust
@@ -66,7 +56,7 @@ On `x86` and `x86_64` targets, prefetch instructions are available on the `stabl
 toolchain.
 ```TOML
 [dependencies]
-fq = { version = "0.0.5", features = ["unstable"] }
+fq = { version = "0.1.0", features = ["unstable"] }
 ```
 
 ## Benchmarks

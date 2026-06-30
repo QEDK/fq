@@ -20,3 +20,7 @@ path = "src/tokio_threads.rs"
 [[bin]]
 name = "std-threads"
 path = "src/std_threads.rs"
+
+[[bin]]
+name = "latency-hist"
+path = "src/latency_hist.rs"

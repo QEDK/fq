@@ -1,11 +1,5 @@
 /*!
 A fast and simple ring-buffer-based single-producer, single-consumer queue with no dependencies. You can use this to write Rust programs with low-latency message passing.
-
-## Installation
-Add this to your `Cargo.toml`:
-```TOML
-[dependencies]
-fq = "0.0.5"
 ```
 
 ## Quickstart
@@ -57,19 +51,9 @@ On `x86` and `x86_64` targets, prefetch instructions are available on the `stabl
 toolchain.
 ```TOML
 [dependencies]
-fq = { version = "0.0.5", features = ["unstable"] }
+fq = { version = "0.1.0", features = ["unstable"] }
 ```
-
-## Benchmarks
-Benchmarks are strictly difficult due to the nature of the program, it's somewhat simple to do a same-CPU
-bench but performance will still be affected based on the core type and cache contention. Benchmarks are
-provided in the [benches](benches/bench.rs) directory and can be run with `cargo bench`. Contributions via
-PRs for additional benchmarks are welcome.
 */
-#![cfg_attr(
-    all(nightly, target_arch = "aarch64"),
-    feature(stdarch_aarch64_prefetch)
-)]
 use core::alloc::Layout;
 use core::cell::UnsafeCell;
 use core::marker::PhantomData;
@@ -154,15 +138,21 @@ const CACHE_LINE_SIZE: usize = 32;
 const CACHE_LINE_SIZE: usize = 64;
 
 /// A fast lock-free single-producer, single-consumer queue
+// repr(C): keeps the read-only trio on its own leading cache line and ends
+// the struct on a line boundary, so no field shares a line with neighboring
+// heap allocations.
+#[repr(C)]
 pub struct FastQueue<T> {
-    /// Capacity mask (capacity - 1) for fast modulo
-    mask: CachePadded<usize>,
+    /// Capacity mask (capacity - 1) for fast modulo.
+    /// Read-only after construction; shares a cache line with `capacity`
+    /// and `buffer` so the hot paths touch one line instead of three.
+    mask: usize,
 
     /// The actual capacity
-    capacity: CachePadded<usize>,
+    capacity: usize,
 
     /// Buffer storing elements directly
-    buffer: CachePadded<*mut MaybeUninit<T>>,
+    buffer: *mut MaybeUninit<T>,
 
     /// Written by producer, read by consumer.
     head: CachePadded<AtomicUsize>,
@@ -205,9 +195,9 @@ impl<T> FastQueue<T> {
         }
 
         let queue = Arc::new(FastQueue {
-            mask: CachePadded(mask),
-            capacity: CachePadded(capacity),
-            buffer: CachePadded(buffer),
+            mask,
+            capacity,
+            buffer,
             head: CachePadded(AtomicUsize::new(0)),
             tail: CachePadded(AtomicUsize::new(0)),
             _pd: PhantomData,
@@ -234,25 +224,27 @@ impl<T> FastQueue<T> {
 impl<T> Drop for FastQueue<T> {
     /// Drops all elements in the queue. This will only drop the elements, not the queue itself.
     fn drop(&mut self) {
-        let head = self.head.0.load(Ordering::Relaxed);
-        let mut tail = self.tail.0.load(Ordering::Relaxed);
+        if core::mem::needs_drop::<T>() {
+            let head = self.head.0.load(Ordering::Relaxed);
+            let mut tail = self.tail.0.load(Ordering::Relaxed);
 
-        while tail != head {
-            unsafe {
-                let index = tail & self.mask.0;
-                let slot = self.buffer.0.add(index);
-                ptr::drop_in_place((*slot).as_mut_ptr());
+            while tail != head {
+                unsafe {
+                    let index = tail & self.mask;
+                    let slot = self.buffer.add(index);
+                    ptr::drop_in_place((*slot).as_mut_ptr());
+                }
+                tail = tail.wrapping_add(1);
             }
-            tail = tail.wrapping_add(1);
         }
 
         unsafe {
             let layout = Layout::from_size_align(
-                self.capacity.0 * size_of::<MaybeUninit<T>>(),
+                self.capacity * size_of::<MaybeUninit<T>>(),
                 CACHE_LINE_SIZE,
             )
             .expect("layout");
-            dealloc(self.buffer.0 as *mut u8, layout);
+            dealloc(self.buffer as *mut u8, layout);
         }
     }
 }
@@ -287,7 +279,7 @@ impl<T> Producer<T> {
 
         let cached_tail = unsafe { *self.cached_tail.0.get() };
 
-        if next_head.wrapping_sub(cached_tail) > self.queue.0.capacity.0 {
+        if next_head.wrapping_sub(cached_tail) > self.queue.0.capacity {
             // Reload actual tail (slow path)
             let tail = self.queue.0.tail.0.load(Ordering::Acquire);
 
@@ -296,14 +288,14 @@ impl<T> Producer<T> {
             }
 
             // Check again with fresh tail
-            if next_head.wrapping_sub(tail) > self.queue.0.capacity.0 {
+            if next_head.wrapping_sub(tail) > self.queue.0.capacity {
                 return Err(value);
             }
         }
 
         unsafe {
-            let index = head & self.queue.0.mask.0;
-            let slot = self.queue.0.buffer.0.add(index);
+            let index = head & self.queue.0.mask;
+            let slot = self.queue.0.buffer.add(index);
             (*slot).as_mut_ptr().write(value);
             *self.head.0.get() = next_head;
         }
@@ -360,15 +352,21 @@ impl<T> Producer<T> {
     /// ```
     #[inline(always)]
     pub fn is_full(&self) -> bool {
-        self.len() >= self.queue.0.capacity.0
+        self.len() >= self.queue.0.capacity
     }
 
+    // Prefetch performs no architectural memory access, so nomem is sound.
+    #[allow(clippy::pointers_in_nomem_asm_block)]
     #[inline(always)]
     fn prefetch_write(&self, index: usize) {
-        let slot_index = index & self.queue.0.mask.0;
-        let _slot = unsafe { self.queue.0.buffer.0.add(slot_index) };
+        let slot_index = index & self.queue.0.mask;
+        let _slot = unsafe { self.queue.0.buffer.add(slot_index) };
 
-        #[cfg(all(target_arch = "x86_64", target_feature = "sse"))]
+        #[cfg(all(
+            target_arch = "x86_64",
+            target_feature = "sse",
+            not(target_feature = "prfchw")
+        ))]
         unsafe {
             core::arch::x86_64::_mm_prefetch(_slot as *const i8, core::arch::x86_64::_MM_HINT_T0);
         }
@@ -383,12 +381,13 @@ impl<T> Producer<T> {
             core::arch::x86::_mm_prefetch(_slot as *const i8, core::arch::x86::_MM_HINT_ET0);
         }
 
-        #[cfg(all(feature = "unstable", nightly, target_arch = "aarch64"))]
+        #[cfg(all(target_arch = "aarch64", not(miri)))]
         unsafe {
-            core::arch::aarch64::_prefetch::<
-                { core::arch::aarch64::_PREFETCH_WRITE },
-                { core::arch::aarch64::_PREFETCH_LOCALITY0 },
-            >(_slot as *const i8);
+            core::arch::asm!(
+                "prfm pstl1keep, [{0}]",
+                in(reg) _slot,
+                options(nomem, nostack, preserves_flags)
+            );
         }
     }
 }
@@ -438,8 +437,8 @@ impl<T> Consumer<T> {
         }
 
         let value = unsafe {
-            let index = tail & self.queue.0.mask.0;
-            let slot = self.queue.0.buffer.0.add(index);
+            let index = tail & self.queue.0.mask;
+            let slot = self.queue.0.buffer.add(index);
             (*slot).as_ptr().read()
         };
 
@@ -464,15 +463,26 @@ impl<T> Consumer<T> {
     #[inline(always)]
     pub fn peek(&self) -> Option<&T> {
         let tail = unsafe { *self.tail.0.get() };
-        let head = self.queue.0.head.0.load(Ordering::Acquire);
+        let cached_head = unsafe { *self.cached_head.0.get() };
 
-        if tail == head {
-            return None;
+        // Same cached fast path as pop: only do the Acquire load when the
+        // cache says the queue is empty. Sound through &self because the
+        // consumer is single-threaded (`Consumer` is !Sync).
+        if tail == cached_head {
+            let head = self.queue.0.head.0.load(Ordering::Acquire);
+
+            unsafe {
+                *self.cached_head.0.get() = head;
+            }
+
+            if tail == head {
+                return None;
+            }
         }
 
         unsafe {
-            let index = tail & self.queue.0.mask.0;
-            let slot = self.queue.0.buffer.0.add(index);
+            let index = tail & self.queue.0.mask;
+            let slot = self.queue.0.buffer.add(index);
             Some(&*(*slot).as_ptr())
         }
     }
@@ -511,10 +521,12 @@ impl<T> Consumer<T> {
         self.len() == 0
     }
 
+    // Prefetch performs no architectural memory access, so nomem is sound.
+    #[allow(clippy::pointers_in_nomem_asm_block)]
     #[inline(always)]
     fn prefetch_read(&self, index: usize) {
-        let slot_index = index & self.queue.0.mask.0;
-        let _slot = unsafe { self.queue.0.buffer.0.add(slot_index) };
+        let slot_index = index & self.queue.0.mask;
+        let _slot = unsafe { self.queue.0.buffer.add(slot_index) };
 
         #[cfg(all(target_arch = "x86_64", target_feature = "sse"))]
         unsafe {
@@ -526,12 +538,13 @@ impl<T> Consumer<T> {
             core::arch::x86::_mm_prefetch(_slot as *const i8, core::arch::x86::_MM_HINT_T0);
         }
 
-        #[cfg(all(feature = "unstable", nightly, target_arch = "aarch64"))]
+        #[cfg(all(target_arch = "aarch64", not(miri)))]
         unsafe {
-            core::arch::aarch64::_prefetch::<
-                { core::arch::aarch64::_PREFETCH_READ },
-                { core::arch::aarch64::_PREFETCH_LOCALITY0 },
-            >(_slot as *const i8);
+            core::arch::asm!(
+                "prfm pldl1keep, [{0}]",
+                in(reg) _slot,
+                options(nomem, nostack, preserves_flags)
+            );
         }
     }
 }
